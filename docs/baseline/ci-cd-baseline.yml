@@ -231,4 +231,3 @@ jobs:
           kubectl -n demo-staging rollout status deploy/web --timeout=180s
       - name: Smoke test
         run: bash scripts/smoke.sh http://localhost:30080
-```
