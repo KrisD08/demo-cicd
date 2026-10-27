@@ -2,7 +2,7 @@
   "name": "demo-cicd",
   "image": "mcr.microsoft.com/devcontainers/javascript-node:22",
   "features": {
-    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+    "ghcr.io/devcontainers/features/docker-in-docker:2": { "moby": false },
     "ghcr.io/devcontainers/features/kubectl-helm-minikube:1": { "minikube": "none" }
   },
   "forwardPorts": [8080, 9090, 3001],

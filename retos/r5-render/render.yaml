@@ -1,0 +1,37 @@
+# Reto 5: la aplicación en Render (plan gratuito), con URL pública. Blueprint: Render → New → Blueprint → tu repo.
+# Límites del plan gratuito que explican este diseño (docs de Render, free tier):
+#   - un servicio gratuito NO recibe tráfico privado: por eso web llama a api por su URL pública, no por "http://api:3000"
+#   - la base de datos gratuita expira a los 30 días (14 de gracia) y no tiene backups
+#   - los servicios se duermen a los 15 min sin tráfico: la primera petición tarda
+# Las imágenes salen de GHCR (paquetes públicos). El tag inicial es el SHA de un run verde de main; el pipeline
+# (deploy-render.yml) despliega los siguientes con el deploy hook.
+databases:
+  - name: demo-cicd-db
+    plan: free
+    databaseName: libro
+    user: app
+
+services:
+  - type: web
+    name: demo-cicd-api
+    runtime: image
+    plan: free
+    image:
+      url: ghcr.io/KrisD08/demo-cicd-api:sha-<PENDIENTE: SHA completo de un run verde de main>
+    healthCheckPath: /api/health
+    envVars:
+      - { key: PORT, value: "3000" }
+      - { key: DB_HOST, fromDatabase: { name: demo-cicd-db, property: host } }
+      - { key: DB_PORT, fromDatabase: { name: demo-cicd-db, property: port } }
+      - { key: DB_NAME, fromDatabase: { name: demo-cicd-db, property: database } }
+      - { key: DB_USER, fromDatabase: { name: demo-cicd-db, property: user } }
+      - { key: DB_PASSWORD, fromDatabase: { name: demo-cicd-db, property: password } }
+
+  - type: web
+    name: demo-cicd-web
+    runtime: image
+    plan: free
+    image:
+      url: ghcr.io/KrisD08/demo-cicd-web-render:sha-<PENDIENTE: SHA completo de un run verde de main>
+    envVars:
+      - { key: PORT, value: "8080" }

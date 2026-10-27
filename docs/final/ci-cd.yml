@@ -1,0 +1,380 @@
+# Pipeline CI/CD FINAL de demo-cicd (LAB-04, IF-1116): B2 + B5 + B6 + R1.
+# Para activarlo: cp docs/final/ci-cd.yml .github/workflows/ci-cd.yml (ver docs/PASOS-LAB4.md).
+#
+# Un job por etapa, encadenados con needs. Las acciones van fijadas por SHA (el tag queda de comentario).
+#
+#   lint ─────────┐
+#   sast ─────────┤
+#   test-unit ────┼─> package ─> security ─> deploy-dev (k3d + smoke + integración + ZAP) ─> deploy-staging
+#   test-integr. ─┘                                                                           (aprobación)
+#
+# Respecto a la guía (docs/baseline/ci-cd-baseline.yml):
+#   - lint, sast, test-unit y test-integration corren EN PARALELO: ninguno necesita el resultado de otro,
+#     y package sigue esperando a los cuatro, así que no se salta ninguna compuerta.
+#   - solo linux/amd64 (sin QEMU): Rancher Desktop de esta máquina es amd64. Si tu staging fuera arm64, vuelve a agregar
+#     "linux/arm64" en platforms y la acción setup-qemu-action.
+#   - B2: TruffleHog en lugar de Gitleaks, k3d en lugar de kind.
+#   - B5: cada job deja su resumen en $GITHUB_STEP_SUMMARY.
+#   - R1: OWASP ZAP baseline contra DEV.
+name: CI/CD
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Por defecto el token solo lee. Cada job pide lo que necesita de más.
+permissions:
+  contents: read
+
+# En un PR, un push nuevo cancela el run anterior. En main nunca se cancela un despliegue a medias.
+concurrency:
+  group: ci-cd-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  NODE_VERSION: "22"
+
+jobs:
+  lint:
+    name: 1. Lint (ESLint, HTMLHint, Hadolint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: "**/package-lock.json"
+      - run: npm ci && npm ci --prefix api
+      - run: npm run lint
+      - name: Hadolint sobre los tres Dockerfiles
+        uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
+        with:
+          recursive: true
+          config: .hadolint.yaml
+          failure-threshold: warning
+
+  sast:
+    name: 2. SAST (Semgrep) y secretos (TruffleHog)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0        # TruffleHog revisa todo el historial, no solo el último commit
+          persist-credentials: false
+      - name: Semgrep, análisis estático del código
+        run: >
+          docker run --rm -v "$PWD:/src:ro" semgrep/semgrep:1.180.0
+          semgrep scan --config p/ci --config p/dockerfile --error --metrics=off /src
+      # B2: TruffleHog (en vez de Gitleaks). --fail hace que cualquier hallazgo (verificado o no) deje el job en rojo.
+      - name: TruffleHog, secretos en el historial de Git
+        run: >
+          docker run --rm -v "$PWD:/repo:ro" --entrypoint sh trufflesecurity/trufflehog:3.99.4
+          -c "git config --global --add safe.directory /repo && trufflehog git file:///repo --fail --no-update"
+      - name: Resumen
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "### SAST y secretos"
+            echo
+            echo "- Semgrep \`1.180.0\` con \`p/ci\` y \`p/dockerfile\`: resultado del paso arriba en el job."
+            echo "- TruffleHog \`3.99.4\` sobre todo el historial de Git."
+            echo "- Estado del job: **${JOB_STATUS}**"
+          } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          JOB_STATUS: ${{ job.status }}
+
+  test-unit:
+    name: 3. Pruebas unitarias y del sitio
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: "**/package-lock.json"
+      - run: npm ci && npm ci --prefix api
+      - run: npm run test:unit -- --reporter=default --reporter=json --outputFile.json=resultados-unitarias.json
+      - run: npm run test:site -- --reporter=default --reporter=json --outputFile.json=resultados-sitio.json
+      - name: Resumen para quien aprueba
+        if: ${{ !cancelled() }}
+        run: |
+          node scripts/resumen-vitest.mjs "Pruebas unitarias de la API" resultados-unitarias.json >> "$GITHUB_STEP_SUMMARY"
+          echo >> "$GITHUB_STEP_SUMMARY"
+          node scripts/resumen-vitest.mjs "Pruebas del sitio estático" resultados-sitio.json >> "$GITHUB_STEP_SUMMARY"
+
+  test-integration:
+    name: 4. Pruebas de integración (Compose)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: "**/package-lock.json"
+      - run: npm ci
+      - name: Levantar la aplicación
+        run: |
+          echo "DB_PASSWORD=$(openssl rand -hex 12)" > .env
+          docker compose up -d --build --wait
+      - run: npm run test:integration -- --reporter=default --reporter=json --outputFile.json=resultados-integracion.json
+      - name: Resumen para quien aprueba
+        if: ${{ !cancelled() }}
+        run: node scripts/resumen-vitest.mjs "Pruebas de integración (Compose)" resultados-integracion.json >> "$GITHUB_STEP_SUMMARY"
+      - name: Logs de los contenedores (solo si algo falló)
+        if: failure()
+        run: docker compose logs
+      - name: Apagar
+        if: always()
+        run: docker compose down -v
+
+  package:
+    name: 5. Empaquetar y publicar (${{ matrix.servicio }})
+    needs: [lint, sast, test-unit, test-integration]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        servicio: [web, api, db]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Nombre de la imagen (GHCR exige minúsculas)
+        run: echo "IMAGEN=ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/demo-cicd-${{ matrix.servicio }}" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # Los PR de Dependabot reciben un GITHUB_TOKEN de solo lectura: ahí se construye la imagen (valida el Dockerfile) pero no se publica.
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        if: github.actor != 'dependabot[bot]'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGEN }}
+          tags: type=sha,format=long,prefix=sha-
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ./${{ matrix.servicio }}
+          platforms: linux/amd64
+          push: ${{ github.actor != 'dependabot[bot]' }}
+          provenance: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.servicio }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.servicio }}
+      - name: Resumen
+        run: |
+          {
+            echo "- \`${IMAGEN}:sha-${GITHUB_SHA}\` (${{ matrix.servicio }})"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  security:
+    name: 6. Escaneo de imagen (${{ matrix.servicio }})
+    needs: package
+    # En PR de Dependabot no se publicó imagen que escanear (ver package).
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    env:
+      TRIVY_USERNAME: ${{ github.actor }}
+      TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+    strategy:
+      matrix:
+        servicio: [web, api, db]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Nombre de la imagen
+        run: echo "IMAGEN=ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/demo-cicd-${{ matrix.servicio }}" >> "$GITHUB_ENV"
+      # La compuerta: CRITICAL y HIGH con corrección disponible frenan el pipeline (regla del curso).
+      - name: Trivy, compuerta (CRITICAL,HIGH con parche)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGEN }}:sha-${{ github.sha }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+          trivyignores: .trivyignore
+      # Solo informe (no decide nada): todas las severidades, para el resumen de quien aprueba.
+      - name: Trivy, informe JSON para el resumen
+        if: ${{ !cancelled() }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          skip-setup-trivy: true
+          image-ref: ${{ env.IMAGEN }}:sha-${{ github.sha }}
+          format: json
+          output: trivy.json
+          trivyignores: .trivyignore
+      - name: Resumen para quien aprueba
+        if: ${{ !cancelled() }}
+        env:
+          IMAGE_TAG: sha-${{ github.sha }}
+        run: node scripts/resumen-trivy.mjs "${{ matrix.servicio }}=trivy.json" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-dev:
+    name: 7. Deploy DEV (efímero) y smoke
+    needs: security
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: dev
+    permissions:
+      contents: read
+      packages: read
+    env:
+      K3D_VERSION: v5.9.0
+      # sha256 del binario k3d-linux-amd64 de esa versión (página de la release en GitHub).
+      K3D_SHA256: 06d8f25bc3a971c4eb29e0ff08429b180402db0f4dec838c9eac427e296800a0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: "**/package-lock.json"
+      - run: npm ci
+      - run: echo "PREFIJO=ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/demo-cicd" >> "$GITHUB_ENV"
+      # B2: k3d (en vez de kind). Versión fija y binario verificado con su sha256.
+      - name: Crear el clúster (k3d)
+        run: |
+          curl -fsSL -o k3d "https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/k3d-linux-amd64"
+          echo "${K3D_SHA256}  k3d" | sha256sum -c -
+          sudo install -m 0755 k3d /usr/local/bin/k3d
+          k3d cluster create dev --wait --timeout 180s
+          kubectl get nodes
+      - name: Namespace y secretos
+        env:
+          ACTOR: ${{ github.actor }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          kubectl create namespace demo-dev
+          kubectl -n demo-dev create secret docker-registry ghcr \
+            --docker-server=ghcr.io --docker-username="$ACTOR" --docker-password="$TOKEN"
+          kubectl -n demo-dev create secret generic db-credenciales --from-literal=DB_PASSWORD="$(openssl rand -hex 16)"
+      - name: Desplegar
+        run: scripts/desplegar.sh k8s/overlays/dev "$PREFIJO" "sha-${{ github.sha }}"
+      - name: Esperar el rollout
+        run: |
+          kubectl -n demo-dev rollout status deploy/db  --timeout=180s
+          kubectl -n demo-dev rollout status deploy/api --timeout=180s
+          kubectl -n demo-dev rollout status deploy/web --timeout=180s
+      - name: Smoke test y pruebas de integración contra DEV
+        run: |
+          kubectl -n demo-dev port-forward svc/web 8080:80 &
+          PF=$!
+          trap 'kill $PF' EXIT
+          sleep 3
+          bash scripts/smoke.sh http://localhost:8080
+          APP_URL=http://localhost:8080 npm run test:integration -- --reporter=default --reporter=json --outputFile.json=resultados-dev.json
+      # R1: DAST. ZAP baseline = análisis pasivo (no ataca ni escribe datos). Cada alerta que quede sin corregir
+      # tiene que estar en .zap/rules.tsv como IGNORE con su porqué; las demás ponen el job en rojo.
+      - name: DAST, OWASP ZAP baseline contra DEV
+        run: |
+          kubectl -n demo-dev port-forward svc/web 8080:80 &
+          PF=$!
+          trap 'kill $PF' EXIT
+          sleep 3
+          mkdir -p zap-reporte
+          cp .zap/rules.tsv zap-reporte/rules.tsv
+          chmod 777 zap-reporte
+          docker run --rm --network host -v "$PWD/zap-reporte:/zap/wrk:rw" zaproxy/zap-stable:2.17.0 \
+            zap-baseline.py -t http://localhost:8080 -c rules.tsv -r reporte.html -J reporte.json -m 1
+      - name: Reporte de ZAP como artefacto
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: reporte-zap
+          path: |
+            zap-reporte/reporte.html
+            zap-reporte/reporte.json
+          if-no-files-found: warn
+      - name: Resumen para quien aprueba STAGING
+        if: ${{ !cancelled() }}
+        env:
+          MENSAJE: ${{ github.event.head_commit.message }}
+          ESTADO: ${{ job.status }}
+        run: |
+          {
+            echo "### Lo que vas a aprobar para STAGING"
+            echo
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Mensaje: $(printf '%s' "$MENSAJE" | head -n1)"
+            echo "- Imágenes (las mismas que pasaron por \`security\`): \`${PREFIJO}-{web,api,db}:sha-${GITHUB_SHA}\`"
+            echo "- Resultado de DEV (clúster efímero, smoke, integración y ZAP): **${ESTADO}**"
+            echo
+            if [ -f resultados-dev.json ]; then
+              node scripts/resumen-vitest.mjs "Pruebas de integración contra DEV" resultados-dev.json
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Diagnóstico (solo si algo falló)
+        if: failure()
+        run: |
+          kubectl -n demo-dev get all
+          kubectl -n demo-dev describe pods
+          kubectl -n demo-dev logs -l app=api --tail=50 || true
+          kubectl -n demo-dev logs -l app=db  --tail=50 || true
+
+  deploy-staging:
+    name: 8. Deploy STAGING (con aprobación)
+    needs: deploy-dev
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: self-hosted
+    timeout-minutes: 15
+    environment:
+      name: staging
+      url: http://localhost:30080
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: echo "PREFIJO=ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/demo-cicd" >> "$GITHUB_ENV"
+      - name: Desplegar la misma imagen que pasó por DEV
+        run: scripts/desplegar.sh k8s/overlays/staging "$PREFIJO" "sha-${{ github.sha }}"
+      - name: Esperar el rollout
+        run: |
+          kubectl -n demo-staging rollout status deploy/db  --timeout=180s
+          kubectl -n demo-staging rollout status deploy/api --timeout=180s
+          kubectl -n demo-staging rollout status deploy/web --timeout=180s
+      - name: Smoke test
+        run: bash scripts/smoke.sh http://localhost:30080
+      - name: Evidencia, pods e imágenes en STAGING
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "### STAGING"
+            echo
+            echo '```'
+            kubectl -n demo-staging get pods -o custom-columns=POD:.metadata.name,LISTO:.status.containerStatuses[0].ready,IMAGEN:.spec.containers[0].image
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,25 @@
+# Reemplaza k8s/overlays/staging/kustomization.yaml al activar GitOps (R4).
+# El pipeline solo cambia los newTag y hace commit; Argo CD aplica el cambio.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: demo-staging
+resources:
+  - ../../base
+labels:
+  - pairs:
+      ambiente: staging
+    includeSelectors: false
+patches:
+  - path: web-nodeport.yaml
+  - path: api-replicas.yaml
+images:
+  - name: demo-cicd-web
+    newName: ghcr.io/KrisD08/demo-cicd-web
+    newTag: sha-<PENDIENTE, lo escribe el pipeline>
+  - name: demo-cicd-api
+    newName: ghcr.io/KrisD08/demo-cicd-api
+    newTag: sha-<PENDIENTE, lo escribe el pipeline>
+  - name: demo-cicd-db
+    newName: ghcr.io/KrisD08/demo-cicd-db
+    newTag: sha-<PENDIENTE, lo escribe el pipeline>

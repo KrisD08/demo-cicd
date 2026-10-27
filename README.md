@@ -1,112 +1,177 @@
-# demo-cicd: la aplicación base del LAB-04
+# demo-cicd: libro de visitas con pipeline CI/CD (LAB-04)
 
-Curso IF-1116, Tópicos de Tecnologías de Información, semestre 2026-II. Semana 06.
+[![CI/CD](https://github.com/KrisD08/demo-cicd/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/KrisD08/demo-cicd/actions/workflows/ci-cd.yml)
 
-Aquí les dejo una aplicación completa y funcionando: el libro de visitas del LAB-02, ya contenerizado, con pruebas, con manifiestos de Kubernetes y con métricas. Lo que **no** tiene es el pipeline. Eso lo construyen ustedes siguiendo la [guía práctica de la Semana 06](https://github.com/urp-topicos-2026-2/.github-private/blob/main/semanas/S06/guia-pipeline.md), y lo extienden en el [LAB-04](https://github.com/urp-topicos-2026-2/.github-private/blob/main/semanas/S06/laboratorio/lab-04.md).
+Curso IF-1116, Tópicos de Tecnologías de Información, 2026-II. Aplicación de tres servicios (`web` nginx, `api` Node.js, `db` Postgres) con un pipeline de GitHub Actions de punta a punta: lint, SAST y secretos, pruebas unitarias y de integración, imágenes escaneadas, DEV efímero en Kubernetes, DAST y promoción a STAGING con aprobación manual.
 
-Todo lo que está aquí lo probé y funciona: lint, pruebas unitarias, pruebas de integración, Compose y los manifiestos. Si algo se pone en rojo en su pipeline, el problema está en el pipeline, y eso es justamente lo que tienen que resolver.
+## El pipeline
 
-## Cómo usarlo
-
-No hagan fork. Este repositorio es una **plantilla**: arriba a la derecha, **Use this template → Create a new repository**. Pónganle el nombre `demo-cicd`, en **su** cuenta y **público**. Público porque GitHub Actions y GitHub Packages son gratis sin límite para repositorios públicos, y porque el pipeline es la evidencia que yo reviso.
-
-## Qué hay aquí
-
-```
-web/                    nginx: sirve la página y reenvía /api/ al backend
-    Dockerfile          imagen sin root (nginx-unprivileged), escucha en 8080
-    nginx.conf
-    public/             index.html, estilos.css, libro-de-visitas.js
-api/                    la API en Node.js (Express), con métricas para Prometheus en /metrics
-    Dockerfile
-    app.js              la aplicación, separada del arranque para poder probarla sin base de datos
-    server.js           el arranque: pool de Postgres, puerto, señales
-db/                     Postgres con las tablas ya incluidas
-tests/
-    unit/               pruebas unitarias de la API, con un pool falso (Vitest + Supertest)
-    site/               pruebas del sitio estático (Vitest + jsdom)
-    integration/        pruebas contra la aplicación completa, entrando por web (fetch)
-scripts/
-    smoke.sh            cinco comprobaciones rápidas contra un ambiente desplegado
-    desplegar.sh        kubectl kustomize + reemplazo de imágenes + kubectl apply
-k8s/
-    base/               Deployments, Services, ConfigMap y PVC
-    overlays/dev/       namespace demo-dev
-    overlays/staging/   namespace demo-staging, web por NodePort 30080, dos réplicas de api
-observabilidad/         Prometheus y Grafana con un dashboard RED ya armado
-compose.yaml            la aplicación en su máquina, con perfil opcional de observabilidad
-.devcontainer/          para que todo arranque solo en GitHub Codespaces
+```mermaid
+flowchart LR
+    L["1 lint"] --> P["5 package"]
+    S["2 sast"] --> P
+    TU["3 test-unit"] --> P
+    TI["4 test-integration"] --> P
+    P --> SEC["6 security"] --> DEV["7 deploy-dev<br/>k3d efímero + smoke + integración + ZAP"] --> AP{"aprobación"} --> STG["8 deploy-staging<br/>Rancher Desktop"]
+    style L fill:#4ba3c7,stroke:#4ba3c7,color:#fff
+    style S fill:#d9635f,stroke:#d9635f,color:#fff
+    style TU fill:#4ba3c7,stroke:#4ba3c7,color:#fff
+    style TI fill:#4ba3c7,stroke:#4ba3c7,color:#fff
+    style P fill:#e8a23b,stroke:#e8a23b,color:#fff
+    style SEC fill:#d9635f,stroke:#d9635f,color:#fff
+    style DEV fill:#3b7d45,stroke:#3b7d45,color:#fff
+    style AP fill:#fff3cd,stroke:#b58105,color:#5c4300
+    style STG fill:#1f2024,stroke:#1f2024,color:#fff
 ```
 
-## Correrlo en su máquina
+| # | Etapa (job) | Herramienta | Qué revisa | Si falla | Evento |
+|---|---|---|---|---|---|
+| 1 | `lint` | ESLint, HTMLHint, Hadolint | JavaScript, HTML y los tres Dockerfiles | No se publica nada | PR y push a `main` |
+| 2 | `sast` | Semgrep `1.180.0`, TruffleHog `3.99.4` | Patrones inseguros en código/config y secretos en todo el historial | No se publica nada | PR y push a `main` |
+| 3 | `test-unit` | Vitest, Supertest, jsdom | API con pool falso y el sitio estático | No se publica nada | PR y push a `main` |
+| 4 | `test-integration` | Vitest + Docker Compose | La aplicación completa entrando por `web` | No se publica nada | PR y push a `main` |
+| 5 | `package` | Buildx, GHCR | Construye y publica `demo-cicd-{web,api,db}:sha-<commit>` | No hay imagen que escanear | PR y push a `main` |
+| 6 | `security` | Trivy | `CRITICAL,HIGH` con corrección disponible, por imagen | Nada llega a DEV | PR y push a `main` |
+| 7 | `deploy-dev` | k3d `v5.9.0`, kubectl, ZAP `2.17.0` | Despliegue en clúster efímero, smoke, integración y DAST | No hay aprobación a STAGING | Solo push a `main` |
+| 8 | `deploy-staging` | Runner propio, kubectl | Promueve **la misma imagen** a Rancher Desktop | Staging queda como estaba | Solo push a `main`, espera aprobación |
+
+Un PR nunca despliega. Cada run deja un resumen (`$GITHUB_STEP_SUMMARY`) con resultados de pruebas, vulnerabilidades por severidad y lo que se está aprobando. Una versión secuencial, la de la guía, está en [`docs/baseline/ci-cd-baseline.yml`](docs/baseline/ci-cd-baseline.yml).
+
+## Correrlo en tu máquina
 
 ```bash
-cp .env.example .env          # y cambien la contraseña
+cp .env.example .env          # y cambia la contraseña
 docker compose up -d --build --wait
 open http://localhost:8080    # en Windows: start http://localhost:8080
 ```
 
-Con observabilidad:
-
 ```bash
-docker compose --profile observabilidad up -d --build --wait
-open http://localhost:9090    # Prometheus
-open http://localhost:3001    # Grafana, usuario admin, contraseña admin
-```
-
-## Las pruebas, una por una
-
-```bash
-npm ci && npm ci --prefix api   # una sola vez
-
-npm run lint                    # ESLint sobre el JavaScript, HTMLHint sobre el HTML
-npm run test:unit               # 9 pruebas, sin base de datos, en menos de un segundo
-npm run test:site               # 6 pruebas sobre web/public
-npm run test:integration        # 6 pruebas contra http://localhost:8080 (la app tiene que estar levantada)
-APP_URL=http://localhost:30080 npm run test:integration   # las mismas, contra otro ambiente
+npm ci && npm ci --prefix api
+npm run lint
+npm run test:unit             # pruebas unitarias de la API
+npm run test:site             # pruebas del sitio
+npm run test:integration      # contra http://localhost:8080 (la app tiene que estar levantada)
 bash scripts/smoke.sh http://localhost:8080
-```
-
-Los `Dockerfile` se revisan con [Hadolint](https://github.com/hadolint/hadolint):
-
-```bash
-docker run --rm -i hadolint/hadolint < api/Dockerfile
 ```
 
 ## La API
 
 | Método y ruta | Qué hace | Respuesta |
 |---|---|---|
-| `GET /api/health` | Dice si el servicio está sano | `200` con `{"status":"ok"}`, o `503` si no puede hablar con la base de datos |
+| `GET /api/health` | Dice si el servicio está sano | `200` `{"status":"ok"}`, o `503` si no hay base de datos |
 | `GET /api/mensajes` | Lista los mensajes, el más reciente primero | `200` con un arreglo JSON |
-| `POST /api/mensajes` | Crea un mensaje. Recibe `{"nombre":"...","mensaje":"..."}` | `201` con el mensaje creado, o `400` si falta un campo o el mensaje pasa de 280 caracteres |
-| `GET /metrics` | Métricas en formato Prometheus | Solo dentro de la red. nginx devuelve `404` si alguien la pide desde afuera |
+| `GET /api/estadisticas` | Cuenta los mensajes (B4) | `200` `{"total": N}` |
+| `POST /api/mensajes` | Crea un mensaje `{"nombre","mensaje"}` | `201`, o `400` si falta un campo o el mensaje pasa de 280 caracteres |
+| `GET /metrics` | Métricas de Prometheus | Solo dentro de la red; nginx devuelve `404` desde afuera |
 
-Toda la configuración entra por variables de entorno: `PORT`, `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER` y `DB_PASSWORD`. En el código no hay ninguna contraseña, y así debe seguir.
+## B3: rómpelo por etapa
 
-## Kubernetes
+| Etapa | Qué rompí | Run en rojo | Run en verde | Minuto de detección |
+|---|---|---|---|---|
+| `lint` | <PENDIENTE> | <PENDIENTE: enlace> | <PENDIENTE: enlace> | <PENDIENTE> |
+| <PENDIENTE: etapa> | <PENDIENTE> | <PENDIENTE: enlace> | <PENDIENTE: enlace> | <PENDIENTE> |
+| <PENDIENTE: etapa> | <PENDIENTE> | <PENDIENTE: enlace> | <PENDIENTE: enlace> | <PENDIENTE> |
+| <PENDIENTE: etapa> | <PENDIENTE> | <PENDIENTE: enlace> | <PENDIENTE: enlace> | <PENDIENTE> |
 
-Los manifiestos usan imágenes `demo-cicd-web:local`, `demo-cicd-api:local` y `demo-cicd-db:local`. El script `scripts/desplegar.sh` las cambia por las de su registro antes de aplicar:
+## B6: antes y después
 
-```bash
-kubectl create namespace demo-staging
-kubectl -n demo-staging create secret generic db-credenciales --from-literal=DB_PASSWORD="$(openssl rand -hex 16)"
-scripts/desplegar.sh k8s/overlays/staging ghcr.io/<usuario>/demo-cicd sha-<commit>
-kubectl -n demo-staging rollout status deploy/web deploy/api deploy/db
-open http://localhost:30080
+"Antes" = primer run completo en verde con `docs/baseline/ci-cd-baseline.yml`. "Después" = `ci-cd.yml` actual. No incluye la espera de la aprobación.
+
+| Job | Antes | Después |
+|---|---|---|
+| lint | <PENDIENTE> | <PENDIENTE> |
+| sast | <PENDIENTE> | <PENDIENTE> |
+| test-unit | <PENDIENTE> | <PENDIENTE> |
+| test-integration | <PENDIENTE> | <PENDIENTE> |
+| package | <PENDIENTE> | <PENDIENTE> |
+| security | <PENDIENTE> | <PENDIENTE> |
+| deploy-dev | <PENDIENTE> | <PENDIENTE> |
+| deploy-staging | <PENDIENTE> | <PENDIENTE> |
+| **Total del run** | <PENDIENTE> | <PENDIENTE> |
+
+Qué se cambió para acelerar: `lint`, `sast`, `test-unit` y `test-integration` corren en paralelo (antes eran una cadena); `package` espera a los cuatro, así que la compuerta es la misma; solo `linux/amd64` (sin QEMU ni `arm64`); `concurrency` cancela runs viejos de un PR; caché de capas de Docker y de npm.
+
+## Bitácora de decisiones
+
+### B2: Herramientas cambiadas
+
+- **Decisión:** TruffleHog en lugar de Gitleaks (secretos) y k3d en lugar de kind (clúster efímero de DEV).
+- **Alternativas que evalué:** <PENDIENTE: al menos dos por cambio, con pros y contras>
+- **Por qué elegí esta:** <PENDIENTE>
+- **Fuentes consultadas:** <PENDIENTE: enlaces>
+- **Cómo lo verifiqué:** <PENDIENTE: enlace al run en verde y al run en rojo de cada una>
+- **Qué no me funcionó:** <PENDIENTE>
+
+### Reto 1: DAST con OWASP ZAP
+
+- **Decisión:** ZAP baseline `2.17.0` dentro de `deploy-dev`, contra DEV; cabeceras de seguridad en `web/nginx.conf`; alertas aceptadas en `.zap/rules.tsv`.
+- **Alternativas que evalué:** <PENDIENTE>
+- **Por qué elegí esta:** <PENDIENTE>
+- **Fuentes consultadas:** <PENDIENTE>
+- **Cómo lo verifiqué:** <PENDIENTE: enlace al run con el reporte>
+- **Qué no me funcionó:** <PENDIENTE>
+
+### Reto 2: GitLab CI
+
+- **Decisión:** `.gitlab-ci.yml` con `test`, `build` y `deploy` manual.
+- **Alternativas que evalué:** <PENDIENTE> · **Por qué elegí esta:** <PENDIENTE> · **Fuentes:** <PENDIENTE>
+- **Cómo lo verifiqué:** <PENDIENTE: enlace al pipeline en GitLab> · **Qué no me funcionó:** <PENDIENTE>
+
+| GitHub Actions | GitLab CI |
+|---|---|
+| `.github/workflows/ci-cd.yml` | `.gitlab-ci.yml` |
+| `on:` (pull_request, push) | `rules:` / `workflow:rules` |
+| `jobs:` + `needs:` | `stages:` + jobs (`needs:` opcional) |
+| `runs-on: ubuntu-latest` | runners compartidos; `image:` por job |
+| `uses: actions/...` | `image:`, `include:` y `script:` |
+| `strategy.matrix` | `parallel: matrix:` |
+| `secrets.GITHUB_TOKEN` | `$CI_REGISTRY_USER` / `$CI_REGISTRY_PASSWORD` |
+| `ghcr.io/<usuario>/...` | `$CI_REGISTRY_IMAGE` |
+| `github.sha` | `$CI_COMMIT_SHA` / `$CI_COMMIT_SHORT_SHA` |
+| `environment:` con revisores | `when: manual` (o `environment:` + entornos protegidos) |
+| `actions/upload-artifact` | `artifacts:` |
+| Servicio Docker del runner | `services: [docker:dind]` |
+
+### Reto 3: Observabilidad en STAGING
+
+- **Decisión:** Prometheus y Grafana con manifiestos propios en `k8s/observabilidad/` (sin Helm), alerta `TasaDeErrores5xxAlta` (> 5 % durante 1 min).
+- **Alternativas que evalué:** <PENDIENTE: p. ej. kube-prometheus-stack> · **Por qué elegí esta:** <PENDIENTE> · **Fuentes:** <PENDIENTE>
+- **Cómo lo verifiqué:** <PENDIENTE: capturas del dashboard y de la alerta disparada> · **Qué no me funcionó:** <PENDIENTE>
+- **¿Qué métrica agregaría para saber si la base se vuelve lenta?** <PENDIENTE: tu respuesta>
+
+### Reto 4: GitOps con Argo CD
+
+- **Estado:** <PENDIENTE: no intentado / intentado; ver `retos/r4-argocd/`>
+- **Pregunta de la defensa, ¿qué gano y qué pierdo cuando el pipeline ya no toca el clúster?** <PENDIENTE: tu respuesta>
+
+### Reto 5: Ambiente con URL pública
+
+- **Decisión:** GKE Autopilot con Workload Identity Federation (OIDC, sin claves en GitHub); carpeta `retos/r5-gke/`. URL: <PENDIENTE: URL pública>. Alternativa preparada: Render, en `retos/r5-render/`.
+- **Alternativas que evalué:** Render (deploy hooks sin vencimiento, API expuesta), Koyeb (no pude confirmar su red interna). <PENDIENTE: tus pros y contras>
+- **Por qué elegí esta:** <PENDIENTE> · **Fuentes:** <PENDIENTE: enlaces a la documentación de Google Cloud que uses>
+- **Cómo lo verifiqué:** <PENDIENTE: enlace al run>
+- **Qué no me funcionó:** <PENDIENTE>
+
+### Reto 6: Terraform
+
+- **Decisión:** `terraform/` con el provider `integrations/github`: ruleset de `main` y ambientes `dev` y `staging`.
+- **Alternativas que evalué:** <PENDIENTE: Ansible para el runner> · **Por qué elegí esta:** <PENDIENTE> · **Fuentes:** <PENDIENTE>
+- **Cómo lo verifiqué:** <PENDIENTE: salida de `terraform plan`> · **Qué no me funcionó:** <PENDIENTE>
+
+## Estructura
+
 ```
-
-El Secret `db-credenciales` se crea **en el clúster**, una sola vez. No está en el repositorio ni lo crea el pipeline de staging. Los pods llevan `imagePullSecrets: ghcr`: si sus paquetes son públicos, ese Secret no hace falta y Kubernetes lo ignora; si son privados, créenlo con un token que tenga `read:packages`.
-
-## Lo que no está aquí, a propósito
-
-- `.github/workflows/`: el pipeline. Es el trabajo de la guía y del laboratorio
-- `.github/dependabot.yml`
-- Los ambientes de GitHub (`dev`, `staging`) y la protección de `main`
-- La configuración de los runners, de GitLab CI, de Argo CD y de todo lo que piden los retos
-
-## Dudas
-
-En el [issue de entrega del LAB-04](https://github.com/urp-topicos-2026-2/.github-private/issues). Cuando pregunten, pasen el enlace al run que falló, digan en qué job y en qué paso, qué esperaban y qué pasó.
-
-Ing. Ronald Requena Crispín
+web/ api/ db/           los tres servicios (Dockerfiles endurecidos con apk upgrade)
+tests/                  unit, site, integration
+scripts/                smoke.sh, desplegar.sh, resumen-vitest.mjs, resumen-trivy.mjs
+k8s/                    base, overlays (dev, staging) y observabilidad (R3)
+.github/                workflows/ci-cd.yml y dependabot.yml
+.zap/rules.tsv          alertas de ZAP aceptadas, con su porqué (R1)
+.gitlab-ci.yml          R2
+retos/r4-argocd/        R4 (alternativa de deploy-staging)
+retos/r5-gke/           R5 (URL pública en GKE con OIDC)
+retos/r5-render/        R5, alternativa en Render
+terraform/              R6
+docs/baseline/          el pipeline de la guía, para medir el "antes" (B6)
+compose.yaml            la app en tu máquina, con perfil opcional de observabilidad
+```

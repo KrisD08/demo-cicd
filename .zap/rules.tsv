@@ -1,0 +1,6 @@
+# Reglas de ZAP baseline (formato: id<TAB>ACCION<TAB>(comentario)). ACCION: IGNORE, INFO, WARN o FAIL.
+# Cualquier alerta que no esté aquí como IGNORE deja el job en rojo.
+# Para IGNORE una alerta, escribe aquí el porqué: una por una, sin atajos (Reto 1).
+#
+# <PENDIENTE: después de tu primer run con ZAP, agrega aquí SOLO las alertas que decidas aceptar, ejemplo:>
+# 10049	IGNORE	(Storable and Cacheable Content: el sitio es público y estático, no hay datos de usuario en las respuestas cacheables)

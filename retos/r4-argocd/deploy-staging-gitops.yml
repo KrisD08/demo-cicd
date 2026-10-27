@@ -1,0 +1,27 @@
+# Job que REEMPLAZA a deploy-staging en .github/workflows/ci-cd.yml cuando activas GitOps (R4).
+# Ya no hace kubectl apply ni necesita el runner propio: solo escribe el SHA nuevo en Git.
+# Para que pueda hacer push a main protegida, en el ruleset agrega como "bypass" a la app GitHub Actions
+# (o cambia el último paso por un PR automático). contents: write va SOLO en este job.
+  deploy-staging:
+    name: 8. Deploy STAGING (GitOps: actualiza Git, Argo CD sincroniza)
+    needs: deploy-dev
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: staging
+      url: http://localhost:30080
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Escribir el tag de la imagen que pasó por DEV en el overlay
+        run: |
+          sed -i -E "s#newTag: .*#newTag: sha-${GITHUB_SHA}#" k8s/overlays/staging/kustomization.yaml
+          git diff --stat
+      - name: Commit y push (el GITHUB_TOKEN no dispara otro run del pipeline)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "gitops: staging -> sha-${GITHUB_SHA}"
+          git push origin HEAD:main

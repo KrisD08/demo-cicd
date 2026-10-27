@@ -1,0 +1,78 @@
+# Reto 5 (GKE). Para activarlo: cp retos/r5-gke/deploy-gke.yml .github/workflows/deploy-gke.yml
+#
+# Corre solo cuando el pipeline CI/CD terminó en verde en un push a main (o sea, tras aprobar STAGING) y promueve
+# las MISMAS imágenes web, api y db a GKE. Sin claves de larga duración: GitHub entrega un token OIDC y Google lo
+# cambia por credenciales temporales (Workload Identity Federation). No hay ningún secreto de Google en GitHub.
+name: Deploy público (GKE)
+
+on:
+  workflow_run:
+    workflows: ["CI/CD"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-gke:
+    name: Deploy público (GKE)
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: publico
+    permissions:
+      contents: read
+      id-token: write   # para pedir el token OIDC; solo este job
+    env:
+      SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      # Sin "ref": se usa la rama por defecto; solo se leen scripts/ y k8s/.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: echo "PREFIJO=ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/demo-cicd" >> "$GITHUB_ENV"
+      - name: Autenticarse en Google Cloud (OIDC, sin claves)
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+        with:
+          install_components: gke-gcloud-auth-plugin
+      - name: Credenciales del clúster
+        uses: google-github-actions/get-gke-credentials@3da1e46a907576cefaa90c484278bb5b259dd395 # v3.0.0
+        with:
+          cluster_name: ${{ vars.GKE_CLUSTER }}
+          location: ${{ vars.GKE_REGION }}
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+      - name: Desplegar la misma imagen que pasó por DEV y STAGING
+        run: scripts/desplegar.sh k8s/overlays/publico "$PREFIJO" "sha-${SHA}"
+      - name: Esperar el rollout
+        run: |
+          kubectl -n demo-publico rollout status deploy/db  --timeout=300s
+          kubectl -n demo-publico rollout status deploy/api --timeout=300s
+          kubectl -n demo-publico rollout status deploy/web --timeout=300s
+      - name: Esperar la IP pública del LoadBalancer
+        run: |
+          for i in $(seq 1 40); do
+            IP="$(kubectl -n demo-publico get svc web -o jsonpath='{.status.loadBalancer.ingress[0].ip}')"
+            [ -n "$IP" ] && break
+            sleep 10
+          done
+          [ -n "$IP" ] || { echo "El LoadBalancer no obtuvo IP"; exit 1; }
+          echo "URL=http://${IP}" >> "$GITHUB_ENV"
+      - name: Smoke test contra la URL pública
+        run: bash scripts/smoke.sh "$URL"
+      - name: Resumen
+        run: |
+          {
+            echo "### Despliegue público (GKE)"
+            echo
+            echo "- URL: ${URL}"
+            echo "- Commit: \`${SHA}\`"
+            echo '```'
+            kubectl -n demo-publico get pods -o custom-columns=POD:.metadata.name,LISTO:.status.containerStatuses[0].ready,IMAGEN:.spec.containers[0].image
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

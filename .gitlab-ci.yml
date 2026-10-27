@@ -1,0 +1,60 @@
+# Reto 2: el mismo pipeline en GitLab CI (gitlab.com + su registro de contenedores).
+# test -> build -> deploy (manual). Las equivalencias con GitHub Actions están en el README.
+stages: [test, build, deploy]
+
+include:
+  # Plantilla de seguridad que GitLab trae lista: agrega el job semgrep-sast en el stage test.
+  - template: Security/SAST.gitlab-ci.yml
+
+variables:
+  DOCKER_TLS_CERTDIR: "/certs"
+
+test:
+  stage: test
+  image: node:22-alpine
+  script:
+    - npm ci && npm ci --prefix api
+    - npm run lint
+    - npm run test:unit
+    - npm run test:site
+
+build:
+  stage: build
+  image: docker:27.5.1
+  services: [docker:27.5.1-dind]
+  parallel:
+    matrix:
+      - SERVICIO: [web, api, db]
+  before_script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+  script:
+    - docker build -t "$CI_REGISTRY_IMAGE/$SERVICIO:$CI_COMMIT_SHORT_SHA" "./$SERVICIO"
+    - docker push "$CI_REGISTRY_IMAGE/$SERVICIO:$CI_COMMIT_SHORT_SHA"
+
+# "Deploy" efímero: levanta las tres imágenes recién publicadas dentro del servicio dind y corre el smoke test.
+# Es manual: el pipeline se detiene aquí hasta que alguien pulse "play".
+deploy:
+  stage: deploy
+  image: docker:27.5.1
+  services: [docker:27.5.1-dind]
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+      allow_failure: false
+  before_script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - apk add --no-cache bash curl
+  script:
+    - PW="$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+    - docker network create demo
+    - >
+      docker run -d --name db --network demo -e POSTGRES_DB=libro -e POSTGRES_USER=app -e POSTGRES_PASSWORD="$PW"
+      "$CI_REGISTRY_IMAGE/db:$CI_COMMIT_SHORT_SHA"
+    - >
+      docker run -d --name api --network demo -e DB_HOST=db -e DB_NAME=libro -e DB_USER=app -e DB_PASSWORD="$PW"
+      "$CI_REGISTRY_IMAGE/api:$CI_COMMIT_SHORT_SHA"
+    - docker run -d --name web --network demo -p 8080:8080 "$CI_REGISTRY_IMAGE/web:$CI_COMMIT_SHORT_SHA"
+    # Los contenedores corren en el host del servicio dind, que se llama "docker".
+    - bash scripts/smoke.sh http://docker:8080
+  after_script:
+    - docker rm -f web api db || true
