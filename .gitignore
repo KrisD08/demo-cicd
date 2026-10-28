@@ -3,3 +3,9 @@ node_modules/
 coverage/
 .DS_Store
 Thumbs.db
+resultados-*.json
+trivy.json
+zap-reporte/
+terraform/.terraform/
+terraform/*.tfstate*
+terraform/*.tfvars

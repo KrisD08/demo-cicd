@@ -5,8 +5,16 @@ FROM node:22-alpine
 ENV NODE_ENV=production
 WORKDIR /app
 
+# B1 (Trivy CRITICAL,HIGH): paquetes del sistema al día, sin dejar caché.
+RUN apk upgrade --no-cache
+
 COPY package*.json ./
-RUN npm ci --omit=dev
+# En producción solo se ejecuta "node": npm y corepack no hacen falta. Quitarlos elimina de la imagen
+# las dependencias de npm (tar, glob, cross-spawn...) que son la fuente típica de HIGH en node:alpine.
+RUN npm ci --omit=dev \
+    && npm cache clean --force \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+              /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
 
 COPY app.js server.js ./
 

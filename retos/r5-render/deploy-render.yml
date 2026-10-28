@@ -1,0 +1,76 @@
+# Reto 5. Para activarlo: cp retos/r5-render/deploy-render.yml .github/workflows/deploy-render.yml
+#
+# Corre SOLO cuando el pipeline CI/CD terminó en verde en un push a main (o sea, después de que aprobaste STAGING).
+# Promueve las MISMAS imágenes api y web que pasaron por DEV y STAGING; solo construye la variante de web para Render
+# (misma imagen base, otro destino del proxy) y le avisa a Render con su deploy hook.
+#
+# Credenciales: Render no ofrece OIDC. Los deploy hooks son URL secretas, cada una de UN servicio, que solo pueden
+# disparar un despliegue. Van como secretos del ambiente "publico" (no del repositorio) y se rotan con "Regenerate Hook".
+# Quedan sin vencimiento (la documentación de Render no menciona uno): es la parte del criterio que este camino no cumple.
+name: Deploy público (Render)
+
+on:
+  workflow_run:
+    workflows: ["CI/CD"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-render:
+    name: Deploy público (Render)
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: publico
+      url: ${{ vars.RENDER_WEB_URL }}
+    permissions:
+      contents: read
+      packages: write
+    env:
+      SHA: ${{ github.event.workflow_run.head_sha }}
+      API_HOST: ${{ vars.RENDER_API_HOST }}
+      WEB_URL: ${{ vars.RENDER_WEB_URL }}
+    steps:
+      # Sin "ref": se usa la rama por defecto, de donde solo se leen nginx.render.conf y smoke.sh.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Nombres de las imágenes (GHCR exige minúsculas)
+        run: echo "PREFIJO=ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/demo-cicd" >> "$GITHUB_ENV"
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Variante de web para Render (misma base, el proxy apunta a la API pública)
+        run: |
+          mkdir ctx
+          sed "s#__API_HOST__#${API_HOST}#g" retos/r5-render/nginx.render.conf > ctx/default.conf
+          printf 'FROM %s-web:sha-%s\nCOPY default.conf /etc/nginx/conf.d/default.conf\n' "$PREFIJO" "$SHA" > ctx/Dockerfile
+          docker build -t "${PREFIJO}-web-render:sha-${SHA}" ctx
+          docker push "${PREFIJO}-web-render:sha-${SHA}"
+      - name: Avisar a Render (deploy hooks, un tag exacto por servicio)
+        env:
+          HOOK_API: ${{ secrets.RENDER_DEPLOY_HOOK_API }}
+          HOOK_WEB: ${{ secrets.RENDER_DEPLOY_HOOK_WEB }}
+        run: |
+          codificar() { printf '%s' "$1" | sed -e 's#/#%2F#g' -e 's#:#%3A#g'; }
+          curl -fsS -X POST "${HOOK_API}&imgURL=$(codificar "${PREFIJO}-api:sha-${SHA}")" > /dev/null
+          curl -fsS -X POST "${HOOK_WEB}&imgURL=$(codificar "${PREFIJO}-web-render:sha-${SHA}")" > /dev/null
+      - name: Esperar a que la aplicación pública responda
+        run: curl --retry 30 --retry-delay 10 --retry-all-errors -fsS "${WEB_URL}/api/health"
+      - name: Smoke test contra la URL pública
+        run: bash scripts/smoke.sh "${WEB_URL}"
+      - name: Resumen
+        run: |
+          {
+            echo "### Despliegue público"
+            echo
+            echo "- URL: ${WEB_URL}"
+            echo "- Commit: \`${SHA}\`"
+            echo "- Imágenes: \`${PREFIJO}-api:sha-${SHA}\` y \`${PREFIJO}-web-render:sha-${SHA}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

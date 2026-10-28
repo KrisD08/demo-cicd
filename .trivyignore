@@ -5,3 +5,58 @@
 # así que la falla (validación de certificados al reanudar sesiones TLS) no es explotable en este uso.
 # Se vuelve a revisar cuando la imagen oficial actualice gosu. Aceptada el 09/10/2026.
 CVE-2025-68121
+
+# --- gosu (imagen postgres:16-alpine): 25 HIGH de la stdlib de Go (v1.24.6) ---
+# gosu solo cambia de usuario (root -> postgres) y ejecuta el servidor al arrancar el contenedor.
+# No hace DNS, HTTP, TLS, XML ni análisis de correos, y no expone ningún puerto. Aceptadas el 27/10/2026.
+# Se vuelven a revisar cuando la imagen oficial de Postgres publique un gosu recompilado (Dependabot avisa).
+# net/url: gosu no analiza URLs
+CVE-2025-61726
+# crypto/x509: gosu no valida certificados
+CVE-2025-61729
+# crypto/x509: gosu no valida certificados
+CVE-2026-111943
+# net/url: gosu no analiza URLs
+CVE-2026-25679
+# crypto/x509: gosu no valida certificados
+CVE-2026-27145
+# crypto/tls y x509: gosu no abre conexiones TLS
+CVE-2026-32280
+# crypto/x509: gosu no valida certificados
+CVE-2026-32281
+# crypto/tls: gosu no abre conexiones TLS
+CVE-2026-32283
+# net: gosu no hace consultas DNS
+CVE-2026-33811
+# HTTP/2: gosu no usa HTTP
+CVE-2026-33814
+# encoding/asn1: gosu no decodifica ASN.1
+CVE-2026-33818
+# net/mail: gosu no procesa correos
+CVE-2026-39820
+# x/net/idna: gosu no procesa nombres de dominio
+CVE-2026-39821
+# os.Root: gosu no usa os.Root
+CVE-2026-39822
+# net: gosu no usa el paquete de red
+CVE-2026-39836
+# net/mail: gosu no procesa correos
+CVE-2026-42499
+# mime: gosu no procesa cabeceras MIME
+CVE-2026-42504
+# net/http y HTTP/2: gosu no usa HTTP
+CVE-2026-56853
+# html/template: gosu no genera HTML
+CVE-2026-56858
+# encoding/xml: gosu no decodifica XML
+CVE-2026-56859
+# net/url: gosu no analiza URLs
+CVE-2026-56860
+# crypto/tls: gosu no abre conexiones TLS
+CVE-2026-56862
+# net/http: gosu no usa HTTP
+CVE-2026-78667
+# HTTP/2: gosu no usa HTTP
+CVE-2026-78669
+# crypto/tls: gosu no abre conexiones TLS
+CVE-2026-97031

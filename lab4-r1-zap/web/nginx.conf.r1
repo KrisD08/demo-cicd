@@ -1,0 +1,39 @@
+# nginx sirve la página y reenvía /api/ al backend.
+# Escucha en 8080 porque la imagen corre sin root (nginx-unprivileged), y sin root no se puede usar el puerto 80.
+server {
+    listen 8080;
+    server_name _;
+
+    # No anunciar la versión de nginx (ZAP: "Server Leaks Version Information").
+    server_tokens off;
+
+    # Cabeceras de seguridad (Reto 1, OWASP ZAP). "always" para que también salgan en 404 y 5xx.
+    # Ojo: si algún bloque location agrega su propio add_header, deja de heredar estos: repítelos ahí.
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+    add_header Cross-Origin-Opener-Policy "same-origin" always;
+    add_header Cross-Origin-Resource-Policy "same-origin" always;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # La API vive en otro contenedor. El navegador nunca la ve directamente.
+    location /api/ {
+        proxy_pass http://api:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 5s;
+    }
+
+    # Las métricas de la API son para Prometheus, no para Internet.
+    location /metrics {
+        return 404;
+    }
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+}

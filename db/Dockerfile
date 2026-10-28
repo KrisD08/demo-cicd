@@ -5,4 +5,7 @@
 # es decir, la primera vez que arranca con un volumen nuevo.
 FROM postgres:16-alpine
 
+# B1 (Trivy CRITICAL,HIGH): paquetes del sistema al día (la imagen oficial corre este paso como root).
+RUN apk upgrade --no-cache
+
 COPY init/ /docker-entrypoint-initdb.d/

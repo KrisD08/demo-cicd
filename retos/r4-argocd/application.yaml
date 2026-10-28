@@ -1,0 +1,23 @@
+# Reto 4: Argo CD vigila k8s/overlays/staging en Git y mantiene el clúster igual (selfHeal revierte cambios a mano).
+# Instalación de Argo CD (una vez):
+#   kubectl create namespace argocd
+#   kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/v3.0.0/manifests/install.yaml
+# Luego:  kubectl apply -f retos/r4-argocd/application.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: demo-cicd-staging
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/KrisD08/demo-cicd.git
+    targetRevision: main
+    path: k8s/overlays/staging
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: demo-staging
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

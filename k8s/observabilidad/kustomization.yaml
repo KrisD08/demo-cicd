@@ -1,0 +1,18 @@
+# Reto 3: Prometheus y Grafana en el clúster. NO forma parte del pipeline: se aplica a mano, una vez.
+#   kubectl create namespace observabilidad
+#   kubectl -n observabilidad create secret generic grafana-admin --from-literal=GF_SECURITY_ADMIN_PASSWORD="$(openssl rand -hex 12)"
+#   kubectl apply -k k8s/observabilidad
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - prometheus.yaml
+  - grafana.yaml
+
+configMapGenerator:
+  - name: grafana-dashboards
+    namespace: observabilidad
+    files:
+      - libro-de-visitas.json
+generatorOptions:
+  disableNameSuffixHash: true

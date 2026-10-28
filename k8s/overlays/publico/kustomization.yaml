@@ -1,0 +1,14 @@
+# PUBLICO (Reto 5, GKE): la misma aplicación, con web detrás de un LoadBalancer (IP pública).
+# El namespace y el Secret db-credenciales se crean a mano una vez (ver retos/r5-gke/README.md).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: demo-publico
+resources:
+  - ../../base
+labels:
+  - pairs:
+      ambiente: publico
+    includeSelectors: false
+patches:
+  - path: web-lb.yaml
