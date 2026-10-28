@@ -1,6 +1,6 @@
 # web: nginx sirviendo la página y reenviando /api/ al backend.
 # Imagen "unprivileged": corre como usuario nginx (uid 101) y escucha en 8080.
-FROM nginxinc/nginx-unprivileged:1.29-alpine
+FROM nginxinc/nginx-unprivileged:1.31-alpine
 
 # B1 (Trivy CRITICAL,HIGH): paquetes del sistema al día. Se necesita root solo para esto; se vuelve al usuario nginx.
 USER root
