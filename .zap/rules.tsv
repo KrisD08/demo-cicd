@@ -4,3 +4,6 @@
 #
 # <PENDIENTE: después de tu primer run con ZAP, agrega aquí SOLO las alertas que decidas aceptar, ejemplo:>
 # 10049	IGNORE	(Storable and Cacheable Content: el sitio es público y estático, no hay datos de usuario en las respuestas cacheables)
+10009	IGNORE	(In Page Banner Information Leak: la pagina 404 por defecto de nginx solo muestra la palabra nginx, sin version porque server_tokens esta en off; el servidor ya se identifica en la cabecera Server)
+10049	IGNORE	(Storable and Cacheable Content: el sitio es publico y estatico; las respuestas no contienen datos de usuario ni de sesion, y el cache reduce carga)
+10109	IGNORE	(Modern Web Application: alerta informativa, ZAP solo avisa de que la pagina usa JavaScript y sugiere el spider AJAX; no es una vulnerabilidad)
