@@ -175,3 +175,4 @@ terraform/              R6
 docs/baseline/          el pipeline de la guía, para medir el "antes" (B6)
 compose.yaml            la app en tu máquina, con perfil opcional de observabilidad
 ```
+
