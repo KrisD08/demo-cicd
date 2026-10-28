@@ -48,7 +48,7 @@ jobs:
           location: ${{ vars.GKE_REGION }}
           project_id: ${{ vars.GCP_PROJECT_ID }}
       - name: Desplegar la misma imagen que pasó por DEV y STAGING
-        run: scripts/desplegar.sh k8s/overlays/publico "$PREFIJO" "sha-${SHA}"
+        run: bash scripts/desplegar.sh k8s/overlays/publico "$PREFIJO" "sha-${SHA}"
       - name: Esperar el rollout
         run: |
           kubectl -n demo-publico rollout status deploy/db  --timeout=300s

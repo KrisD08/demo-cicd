@@ -280,7 +280,7 @@ jobs:
             --docker-server=ghcr.io --docker-username="$ACTOR" --docker-password="$TOKEN"
           kubectl -n demo-dev create secret generic db-credenciales --from-literal=DB_PASSWORD="$(openssl rand -hex 16)"
       - name: Desplegar
-        run: scripts/desplegar.sh k8s/overlays/dev "$PREFIJO" "sha-${{ github.sha }}"
+        run: bash scripts/desplegar.sh k8s/overlays/dev "$PREFIJO" "sha-${{ github.sha }}"
       - name: Esperar el rollout
         run: |
           kubectl -n demo-dev rollout status deploy/db  --timeout=180s
@@ -360,7 +360,7 @@ jobs:
           persist-credentials: false
       - run: echo "PREFIJO=ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/demo-cicd" >> "$GITHUB_ENV"
       - name: Desplegar la misma imagen que pasó por DEV
-        run: scripts/desplegar.sh k8s/overlays/staging "$PREFIJO" "sha-${{ github.sha }}"
+        run: bash scripts/desplegar.sh k8s/overlays/staging "$PREFIJO" "sha-${{ github.sha }}"
       - name: Esperar el rollout
         run: |
           kubectl -n demo-staging rollout status deploy/db  --timeout=180s
