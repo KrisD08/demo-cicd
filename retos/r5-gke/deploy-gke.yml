@@ -10,6 +10,11 @@ on:
     workflows: ["CI/CD"]
     types: [completed]
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "SHA completo del commit de main cuyas imágenes se despliegan"
+        required: true
 
 permissions:
   contents: read
@@ -17,7 +22,10 @@ permissions:
 jobs:
   deploy-gke:
     name: Deploy público (GKE)
-    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'))
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment:
@@ -26,12 +34,14 @@ jobs:
       contents: read
       id-token: write   # para pedir el token OIDC; solo este job
     env:
-      SHA: ${{ github.event.workflow_run.head_sha }}
+      SHA: ${{ github.event.workflow_run.head_sha || inputs.sha }}
     steps:
       # Sin "ref": se usa la rama por defecto; solo se leen scripts/ y k8s/.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Validar el SHA (40 caracteres hexadecimales)
+        run: echo "$SHA" | grep -Eq '^[0-9a-f]{40}$'
       - run: echo "PREFIJO=ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/demo-cicd" >> "$GITHUB_ENV"
       - name: Autenticarse en Google Cloud (OIDC, sin claves)
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
