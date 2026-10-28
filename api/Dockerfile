@@ -1,4 +1,4 @@
-FROM node
+# api: Node.js con Express. Sigue las seis reglas del LAB-02:
 # tag fijo, dependencias antes que código, sin root, sin secretos, imagen chica, un proceso.
 FROM node:22-alpine
 
