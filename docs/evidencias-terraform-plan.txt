@@ -1,0 +1,10 @@
+github_repository_environment.dev: Refreshing state... [id=demo-cicd:dev]
+data.github_user.revisor: Reading...
+github_repository_ruleset.main: Refreshing state... [id=26005741]
+data.github_user.revisor: Read complete after 0s [id=234091956]
+github_repository_environment.staging: Refreshing state... [id=demo-cicd:staging]
+
+No changes. Your infrastructure matches the configuration.
+
+Terraform has compared your real infrastructure against your configuration
+and found no differences, so no changes are needed.

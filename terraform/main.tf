@@ -91,6 +91,7 @@ resource "github_repository_ruleset" "main" {
         for_each = local.checks_requeridos
         content {
           context = required_check.value
+          integration_id = 15368
         }
       }
     }
