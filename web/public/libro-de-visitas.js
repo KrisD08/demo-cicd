@@ -9,6 +9,7 @@ const seccion = document.getElementById("libro-de-visitas");
 const lista = document.getElementById("lista-mensajes");
 const form = document.getElementById("form-mensaje");
 const estado = document.getElementById("form-estado");
+const total = document.getElementById("total-mensajes");
 
 function pintar(mensajes) {
   lista.replaceChildren(
@@ -35,6 +36,14 @@ async function cargar() {
   pintar(await r.json());
 }
 
+async function cargarTotal() {
+  const r = await fetch(`${API}/estadisticas`, { headers: { Accept: "application/json" } });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const { total: n } = await r.json();
+  total.textContent = `(${n} ${n === 1 ? "mensaje" : "mensajes"})`;
+  total.hidden = false;
+}
+
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
   const datos = Object.fromEntries(new FormData(form));
@@ -50,6 +59,7 @@ form.addEventListener("submit", async (e) => {
     form.reset();
     estado.textContent = "¡Gracias por tu mensaje!";
     await cargar();
+    await cargarTotal().catch(() => {});
   } catch (err) {
     estado.textContent = `No se pudo enviar: ${err.message}`;
   }
@@ -57,5 +67,5 @@ form.addEventListener("submit", async (e) => {
 
 // Degradación elegante: la sección solo aparece si el backend contesta.
 cargar()
-  .then(() => { seccion.hidden = false; })
-  .catch((err) => console.info("Libro de visitas oculto:", err.message));
+  .then(() => { seccion.hidden = false; return cargarTotal(); })
+  .catch((err) => console.info("Libro de visitas oculto o sin estadísticas:", err.message));
