@@ -36,6 +36,20 @@ describe(`la aplicación en ${BASE}`, () => {
     expect(lista[0].mensaje).toBe(texto);
   });
 
+  it("/api/estadisticas cuenta los mensajes y sube en uno al crear uno nuevo", async () => {
+    const leer = async () => {
+      const r = await fetch(`${BASE}/api/estadisticas`);
+      expect(r.status).toBe(200);
+      const { total } = await r.json();
+      expect(Number.isInteger(total)).toBe(true);
+      return total;
+    };
+    const antes = await leer();
+    const creado = await fetch(`${BASE}/api/mensajes`, { method: "POST", headers: json, body: JSON.stringify({ nombre: "Pipeline", mensaje: `Estadísticas ${Date.now()}` }) });
+    expect(creado.status).toBe(201);
+    expect(await leer()).toBe(antes + 1);
+  });
+
   it("las métricas de la API no se exponen a través de web", async () => {
     const r = await fetch(`${BASE}/metrics`);
     expect(r.status).toBe(404);

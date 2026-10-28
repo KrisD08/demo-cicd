@@ -44,6 +44,14 @@ export function crearApp({ pool, registro = new client.Registry() }) {
     } catch (e) { next(e); }
   });
 
+  // Estadísticas: cuántos mensajes hay. COUNT(*) llega como bigint (texto en pg), por eso ::int.
+  app.get("/api/estadisticas", async (_req, res, next) => {
+    try {
+      const { rows } = await pool.query("SELECT COUNT(*)::int AS total FROM mensajes");
+      res.json({ total: Number(rows[0].total) });
+    } catch (e) { next(e); }
+  });
+
   app.post("/api/mensajes", async (req, res, next) => {
     const nombre = String(req.body?.nombre ?? "").trim();
     const mensaje = String(req.body?.mensaje ?? "").trim();

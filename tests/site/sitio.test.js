@@ -43,6 +43,12 @@ describe("index.html", () => {
     expect(seccion?.querySelector('textarea[name="mensaje"]')).not.toBeNull();
   });
 
+  it("muestra el total de mensajes junto al título y lo pide a /api/estadisticas", () => {
+    expect(doc.querySelector("h1 #total-mensajes")).not.toBeNull();
+    const js = readFileSync(`${SITIO}/libro-de-visitas.js`, "utf-8");
+    expect(js).toContain("/estadisticas");
+  });
+
   it("no apunta a localhost ni a puertos de la máquina del desarrollador", () => {
     const html = readFileSync(`${SITIO}/index.html`, "utf-8") + readFileSync(`${SITIO}/libro-de-visitas.js`, "utf-8");
     expect(html).not.toMatch(/localhost|127\.0\.0\.1|:3000/);

@@ -72,6 +72,28 @@ describe("GET /api/mensajes", () => {
   });
 });
 
+describe("GET /api/estadisticas", () => {
+  it("devuelve el total de mensajes que cuenta la base", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [{ total: 3 }] });
+    const r = await request(appConPool(query)).get("/api/estadisticas");
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual({ total: 3 });
+    expect(query.mock.calls[0][0]).toMatch(/COUNT\(\*\).*FROM mensajes/i);
+  });
+
+  it("acepta el total como texto (bigint de Postgres) y lo devuelve como número", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [{ total: "12" }] });
+    const r = await request(appConPool(query)).get("/api/estadisticas");
+    expect(r.body).toEqual({ total: 12 });
+  });
+
+  it("responde 500 sin filtrar el detalle si la consulta falla", async () => {
+    const r = await request(appConPool(vi.fn().mockRejectedValue(new Error("boom")))).get("/api/estadisticas");
+    expect(r.status).toBe(500);
+    expect(JSON.stringify(r.body)).not.toContain("boom");
+  });
+});
+
 describe("GET /metrics", () => {
   it("expone métricas en formato Prometheus", async () => {
     const app = appConPool(vi.fn().mockResolvedValue({ rows: [] }));
